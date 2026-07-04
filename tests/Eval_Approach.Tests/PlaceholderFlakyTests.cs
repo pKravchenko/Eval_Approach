@@ -11,6 +11,7 @@ public class PlaceholderFlakyTests
     public static IEnumerable<TestCaseData> Cases =>
         AllTestNames.Select((testName, index) => new TestCaseData(index + 1).SetName(testName));
 
+    [Retry(3)]
     [TestCaseSource(nameof(Cases))]
     public void Placeholder_test_cases_should_compile_and_run(int index)
     {

@@ -2,38 +2,35 @@ namespace Eval_Approach.Tests;
 
 internal static class FlakyFailureController
 {
-    private const string FailureCountEnvironmentVariable = "SIMULATED_FLAKY_FAILURE_COUNT";
+    private const string ForcedFailureCountEnvironmentVariable = "SIMULATED_FLAKY_FAILURE_COUNT";
+    private const double DefaultFailureProbability = 0.15;
 
-    private static readonly Lazy<IReadOnlySet<string>> SelectedFailures = new(CreateSelectedFailures, true);
+    // Forced failures are stable within a run (env-var driven) — simulates a real regression
+    private static readonly Lazy<IReadOnlySet<string>> ForcedFailures = new(CreateForcedFailures, true);
 
     public static void AssertTestPassesOrFails(string testName)
     {
-        if (SelectedFailures.Value.Contains(testName))
+        if (ForcedFailures.Value.Contains(testName))
         {
             Assert.Fail("Simulated flaky test failure");
+            return;
         }
+
+        // Independent per-call random — simulates LLM judge noise.
+        // With [Retry(3)] on the test method, P(fail all 3) = 0.15³ ≈ 0.3%.
+        if (Random.Shared.NextDouble() < DefaultFailureProbability)
+            Assert.Fail("Simulated flaky test failure");
     }
 
-    private static IReadOnlySet<string> CreateSelectedFailures()
+    private static IReadOnlySet<string> CreateForcedFailures()
     {
-        var configuredFailureCount = ResolveFailureCount();
-        var selectedTests = PlaceholderFlakyTests.AllTestNames
+        if (!int.TryParse(Environment.GetEnvironmentVariable(ForcedFailureCountEnvironmentVariable), out var count))
+            return new HashSet<string>();
+
+        count = Math.Clamp(count, 0, PlaceholderFlakyTests.AllTestNames.Count);
+        return PlaceholderFlakyTests.AllTestNames
             .OrderBy(_ => Random.Shared.Next())
-            .Take(configuredFailureCount)
+            .Take(count)
             .ToHashSet(StringComparer.Ordinal);
-
-        return selectedTests;
-    }
-
-    private static int ResolveFailureCount()
-    {
-        if (int.TryParse(Environment.GetEnvironmentVariable(FailureCountEnvironmentVariable), out var configuredCount))
-        {
-            return Math.Clamp(configuredCount, 0, Math.Min(3, PlaceholderFlakyTests.AllTestNames.Count));
-        }
-
-        return Random.Shared.NextDouble() < 0.2
-            ? 0
-            : Random.Shared.Next(1, 4);
     }
 }
