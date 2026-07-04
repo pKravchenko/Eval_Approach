@@ -33,13 +33,6 @@ jobs:
       - name: Build solution
         run: dotnet build --configuration Release --no-restore
 
-      - name: Restore eval cache
-        uses: actions/cache@v4
-        with:
-          path: eval-results/cache
-          key: eval-cache-${{ github.run_id }}
-          restore-keys: eval-cache-
-
       - name: Run NUnit tests
         id: test
         continue-on-error: true
