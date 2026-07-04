@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   test:
@@ -40,6 +41,151 @@ jobs:
           path: TestResults/*.trx
           if-no-files-found: error
 
+      - name: Download previous test history
+        if: always()
+        continue-on-error: true
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $headers = @{
+            "Authorization" = "Bearer $env:GH_TOKEN"
+            "Accept" = "application/vnd.github+json"
+            "X-GitHub-Api-Version" = "2022-11-28"
+          }
+
+          $artifactsUrl = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/artifacts?name=flaky-test-history&per_page=10"
+          $response = Invoke-RestMethod -Uri $artifactsUrl -Headers $headers -ErrorAction SilentlyContinue
+
+          if ($response -and $response.artifacts.Count -gt 0) {
+            # Find the most recent non-expired artifact from a previous run
+            $artifact = $response.artifacts |
+              Where-Object { $_.workflow_run.id -ne [long]$env:GITHUB_RUN_ID -and -not $_.expired } |
+              Select-Object -First 1
+
+            if ($artifact) {
+              New-Item -ItemType Directory -Force -Path ./TestHistory | Out-Null
+              Write-Host "Downloading history artifact $($artifact.id) from run $($artifact.workflow_run.id)"
+              Invoke-WebRequest -Uri $artifact.archive_download_url -Headers $headers -OutFile ./TestHistory/history.zip
+              Expand-Archive -Path ./TestHistory/history.zip -DestinationPath ./TestHistory -Force
+              Remove-Item -Path ./TestHistory/history.zip -Force
+              Write-Host "History downloaded successfully"
+            } else {
+              Write-Host "No suitable previous history artifact found"
+            }
+          } else {
+            Write-Host "No history artifacts found — this appears to be the first run"
+          }
+
+      - name: Evaluate results with statistics
+        if: always()
+        id: evaluate
+        shell: pwsh
+        run: |
+          $HISTORY_FILE = "./TestHistory/test-history.json"
+          $MAX_HISTORY_RUNS = 5
+          $FAILURE_THRESHOLD = 2   # failures in last N runs to be "really failed"
+          $BULK_FAILURE_THRESHOLD = 2  # more than this many failures in one run → always fail
+
+          # Load existing history
+          $history = @()
+          if (Test-Path $HISTORY_FILE) {
+            try {
+              $loaded = Get-Content $HISTORY_FILE -Raw | ConvertFrom-Json
+              if ($loaded) { $history = @($loaded) }
+              Write-Host "Loaded $($history.Count) previous run(s) from history"
+            } catch {
+              Write-Warning "Failed to parse history file: $_"
+            }
+          } else {
+            Write-Host "No history file found — starting fresh"
+          }
+
+          # Parse current TRX file
+          $trxFile = Get-ChildItem -Path "$env:GITHUB_WORKSPACE/TestResults" -Filter *.trx -Recurse | Select-Object -First 1
+          $currentFailedTests = @()
+
+          if ($trxFile) {
+            [xml]$trx = Get-Content -Path $trxFile.FullName
+            $namespaceManager = New-Object System.Xml.XmlNamespaceManager($trx.NameTable)
+            $namespaceManager.AddNamespace("trx", "http://microsoft.com/schemas/VisualStudio/TeamTest/2010")
+            $failedResults = $trx.SelectNodes("//trx:Results/trx:UnitTestResult[@outcome='Failed']", $namespaceManager)
+            $currentFailedTests = @($failedResults | ForEach-Object { $_.testName })
+          }
+
+          Write-Host "Current run failed tests ($($currentFailedTests.Count)): $($currentFailedTests -join ', ')"
+
+          $workflowShouldFail = $false
+          $failureReason = ""
+          $reallyFailedTests = @()
+          $flakyTests = @()
+
+          # Rule 3: bulk failure — more than BULK_FAILURE_THRESHOLD tests in a single run
+          if ($currentFailedTests.Count -gt $BULK_FAILURE_THRESHOLD) {
+            $workflowShouldFail = $true
+            $failureReason = "Bulk failure: $($currentFailedTests.Count) tests failed in this run (threshold: >$BULK_FAILURE_THRESHOLD)"
+            $reallyFailedTests = $currentFailedTests
+          } else {
+            # Rules 1 & 2: per-test history check
+            # Consider the last (MAX_HISTORY_RUNS - 1) stored runs so that the current run
+            # becomes the Nth entry and the window stays at MAX_HISTORY_RUNS total.
+            $recentHistory = @($history | Select-Object -Last ($MAX_HISTORY_RUNS - 1))
+
+            foreach ($testName in $currentFailedTests) {
+              $historicFailures = @($recentHistory | Where-Object { @($_.failedTests) -contains $testName }).Count
+              $totalRunsConsidered = $recentHistory.Count + 1  # +1 for current run
+              $totalFailures = $historicFailures + 1            # +1 for current run
+
+              Write-Host "Test '$testName': failed $totalFailures time(s) in last $totalRunsConsidered run(s)"
+
+              # A single-run result always counts as a real failure (edge case from spec);
+              # otherwise require at least FAILURE_THRESHOLD failures across the window.
+              $isReallyFailed = ($totalRunsConsidered -eq 1) -or ($totalFailures -ge $FAILURE_THRESHOLD)
+
+              if ($isReallyFailed) {
+                $reallyFailedTests += $testName
+              } else {
+                $flakyTests += $testName
+              }
+            }
+
+            if ($reallyFailedTests.Count -gt 0) {
+              $workflowShouldFail = $true
+              $failureReason = "Tests with repeated failures: $($reallyFailedTests -join ', ')"
+            }
+          }
+
+          # Persist updated history (keep at most MAX_HISTORY_RUNS entries)
+          $currentRun = [PSCustomObject]@{
+            runId       = $env:GITHUB_RUN_ID
+            timestamp   = (Get-Date -Format "o")
+            failedTests = $currentFailedTests
+          }
+          $history = @(@($history) + @($currentRun) | Select-Object -Last $MAX_HISTORY_RUNS)
+
+          New-Item -ItemType Directory -Force -Path ./TestHistory | Out-Null
+          $history | ConvertTo-Json -Depth 5 | Set-Content -Path $HISTORY_FILE -Encoding UTF8
+          Write-Host "Saved history with $($history.Count) run(s)"
+
+          # Expose outputs for downstream steps
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "workflow_should_fail=$($workflowShouldFail.ToString().ToLower())"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "failure_reason=$failureReason"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "current_failed_count=$($currentFailedTests.Count)"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "really_failed_tests=$($reallyFailedTests -join ',')"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "flaky_tests=$($flakyTests -join ',')"
+
+          Write-Host "Workflow should fail: $workflowShouldFail"
+          if ($failureReason) { Write-Host "Reason: $failureReason" }
+          if ($flakyTests.Count -gt 0) { Write-Host "Flaky (acceptable): $($flakyTests -join ', ')" }
+
+      - name: Upload test history
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flaky-test-history
+          path: TestHistory/test-history.json
+          if-no-files-found: warn
+
       - name: Publish test summary
         if: always()
         shell: pwsh
@@ -57,15 +203,33 @@ jobs:
           $counters = $trx.SelectSingleNode("//trx:ResultSummary/trx:Counters", $namespaceManager)
           $failedResults = $trx.SelectNodes("//trx:Results/trx:UnitTestResult[@outcome='Failed']", $namespaceManager)
 
+          $workflowShouldFail = "${{ steps.evaluate.outputs.workflow_should_fail }}" -eq "true"
+          $workflowStatus    = if ($workflowShouldFail) { "❌ FAILED" } else { "✅ PASSED" }
+          $failureReason     = "${{ steps.evaluate.outputs.failure_reason }}"
+          $flakyTests        = "${{ steps.evaluate.outputs.flaky_tests }}"
+
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## Test Summary"
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Total tests: $($counters.total)"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Passed tests: $($counters.passed)"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Failed tests: $($counters.failed)"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "| Metric | Value |"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "|--------|-------|"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "| Total tests | $($counters.total) |"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "| Passed | $($counters.passed) |"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "| Failed (this run) | $($counters.failed) |"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "| Workflow result | $workflowStatus |"
+
+          if ($failureReason) {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**Failure reason:** $failureReason"
+          }
+
+          if ($flakyTests) {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**Acceptable flaky tests (below statistical threshold):** $flakyTests"
+          }
 
           if ($failedResults.Count -gt 0) {
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### Failed tests"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### Failed tests (this run)"
 
             foreach ($failedResult in $failedResults) {
               $messageNode = $failedResult.SelectSingleNode("trx:Output/trx:ErrorInfo/trx:Message", $namespaceManager)
@@ -76,6 +240,6 @@ jobs:
             }
           }
 
-      - name: Fail workflow when tests fail
-        if: steps.test.outcome == 'failure'
+      - name: Fail workflow when tests fail based on statistics
+        if: steps.evaluate.outputs.workflow_should_fail == 'true'
         run: exit 1
