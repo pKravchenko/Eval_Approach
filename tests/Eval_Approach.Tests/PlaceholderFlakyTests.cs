@@ -1,22 +1,93 @@
+using System.Runtime.CompilerServices;
+
 namespace Eval_Approach.Tests;
 
 [TestFixture]
-public class PlaceholderFlakyTests
+public class PlaceholderFlakyTests : EvalTestBase
 {
-    public static IReadOnlyList<string> AllTestNames { get; } =
-        Enumerable.Range(1, 50)
-            .Select(index => $"Placeholder_{index:00}")
-            .ToArray();
+    [EvalTest] public void Placeholder_01() => Run();
+    [EvalTest] public void Placeholder_02() => Run();
+    [EvalTest] public void Placeholder_03() => Run();
+    [EvalTest] public void Placeholder_04() => Run();
+    [EvalTest] public void Placeholder_05() => Run();
+    [EvalTest] public void Placeholder_06() => Run();
+    [EvalTest] public void Placeholder_07() => Run();
+    [EvalTest] public void Placeholder_08() => Run();
+    [EvalTest] public void Placeholder_09() => Run();
+    [EvalTest] public void Placeholder_10() => Run();
+    [EvalTest] public void Placeholder_11() => Run();
+    [EvalTest] public void Placeholder_12() => Run();
+    [EvalTest] public void Placeholder_13() => Run();
+    [EvalTest] public void Placeholder_14() => Run();
+    [EvalTest] public void Placeholder_15() => Run();
+    [EvalTest] public void Placeholder_16() => Run();
+    [EvalTest] public void Placeholder_17() => Run();
+    [EvalTest] public void Placeholder_18() => Run();
+    [EvalTest] public void Placeholder_19() => Run();
+    [EvalTest] public void Placeholder_20() => Run();
+    [EvalTest] public void Placeholder_21() => Run();
+    [EvalTest] public void Placeholder_22() => Run();
+    [EvalTest] public void Placeholder_23() => Run();
+    [EvalTest] public void Placeholder_24() => Run();
+    [EvalTest] public void Placeholder_25() => Run();
+    [EvalTest] public void Placeholder_26() => Run();
+    [EvalTest] public void Placeholder_27() => Run();
+    [EvalTest] public void Placeholder_28() => Run();
+    [EvalTest] public void Placeholder_29() => Run();
+    [EvalTest] public void Placeholder_30() => Run();
+    [EvalTest] public void Placeholder_31() => Run();
+    [EvalTest] public void Placeholder_32() => Run();
+    [EvalTest] public void Placeholder_33() => Run();
+    [EvalTest] public void Placeholder_34() => Run();
+    [EvalTest] public void Placeholder_35() => Run();
+    [EvalTest] public void Placeholder_36() => Run();
+    [EvalTest] public void Placeholder_37() => Run();
+    [EvalTest] public void Placeholder_38() => Run();
+    [EvalTest] public void Placeholder_39() => Run();
+    [EvalTest] public void Placeholder_40() => Run();
+    [EvalTest] public void Placeholder_41() => Run();
+    [EvalTest] public void Placeholder_42() => Run();
+    [EvalTest] public void Placeholder_43() => Run();
+    [EvalTest] public void Placeholder_44() => Run();
+    [EvalTest] public void Placeholder_45() => Run();
+    [EvalTest] public void Placeholder_46() => Run();
+    [EvalTest] public void Placeholder_47() => Run();
+    [EvalTest] public void Placeholder_48() => Run();
+    [EvalTest] public void Placeholder_49() => Run();
+    [EvalTest] public void Placeholder_50() => Run();
 
-    public static IEnumerable<TestCaseData> Cases =>
-        AllTestNames.Select((testName, index) => new TestCaseData(index + 1).SetName(testName));
-
-    [Retry(3)]
-    [TestCaseSource(nameof(Cases))]
-    public void Placeholder_test_cases_should_compile_and_run(int index)
+    private void Run([CallerMemberName] string testName = "")
     {
-        FlakyFailureController.AssertTestPassesOrFails(TestContext.CurrentContext.Test.Name);
+        var passed = true;
+        try
+        {
+            FlakyFailureController.AssertTestPassesOrFails(testName);
 
-        Assert.That(index, Is.GreaterThan(0));
+            Storage.Cache
+                .WriteAsync(testName, $"{{\"test\":\"{testName}\",\"timestamp\":\"{DateTime.UtcNow:o}\"}}")
+                .GetAwaiter().GetResult();
+        }
+        catch
+        {
+            passed = false;
+            throw;
+        }
+        finally
+        {
+            var status = passed ? "Passed" : "Failed";
+            var color = passed ? "#2da44e" : "#cf222e";
+            var html = $"""
+                <!DOCTYPE html>
+                <html>
+                <head><meta charset="utf-8"><title>{testName}</title></head>
+                <body style="font-family:sans-serif;padding:2rem">
+                  <h1>{testName}</h1>
+                  <p>Status: <strong style="color:{color}">{status}</strong></p>
+                  <p>Timestamp: {DateTime.UtcNow:o}</p>
+                </body>
+                </html>
+                """;
+            Storage.Reports.WriteHtmlAsync(testName, html).GetAwaiter().GetResult();
+        }
     }
 }

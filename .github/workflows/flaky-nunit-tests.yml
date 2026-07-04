@@ -33,9 +33,18 @@ jobs:
       - name: Build solution
         run: dotnet build --configuration Release --no-restore
 
+      - name: Restore eval cache
+        uses: actions/cache@v4
+        with:
+          path: eval-results/cache
+          key: eval-cache-${{ github.run_id }}
+          restore-keys: eval-cache-
+
       - name: Run NUnit tests
         id: test
         continue-on-error: true
+        env:
+          EVAL_STORAGE_PATH: ${{ github.workspace }}/eval-results
         run: dotnet test --configuration Release --no-build --logger "trx;LogFileName=flaky-results.trx" --results-directory ./TestResults
 
       - name: Upload test results
@@ -45,6 +54,14 @@ jobs:
           name: flaky-nunit-test-results
           path: TestResults/*.trx
           if-no-files-found: error
+
+      - name: Upload eval reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-reports
+          path: eval-results/reports/
+          if-no-files-found: warn
 
       - name: Download previous test history
         if: always() && github.event.inputs.reset_history != 'true'
@@ -262,6 +279,26 @@ jobs:
 
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "| $name | $status | $historyCell |"
           }
+
+      - name: Add eval reports link to summary
+        if: always()
+        shell: pwsh
+        run: |
+          $reportsDir = "$env:GITHUB_WORKSPACE/eval-results/reports"
+          if (-not (Test-Path $reportsDir)) {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "`n> No eval reports were produced."
+            exit 0
+          }
+
+          $files = Get-ChildItem -Path $reportsDir -Filter *.html | Sort-Object Name
+          if ($files.Count -eq 0) { exit 0 }
+
+          $runUrl = "https://github.com/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### Eval reports"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "Download the **eval-reports** artifact to browse HTML reports."
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "[$($files.Count) report(s) available]($runUrl) — look for **eval-reports** in the Artifacts section below."
 
       - name: Fail workflow when tests fail based on statistics
         if: steps.evaluate.outputs.workflow_should_fail == 'true'
