@@ -1,0 +1,78 @@
+name: Flaky NUnit Tests
+
+on:
+  schedule:
+    - cron: '0 */3 * * *'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore dependencies
+        run: dotnet restore
+
+      - name: Build solution
+        run: dotnet build --configuration Release --no-restore
+
+      - name: Run NUnit tests
+        id: test
+        continue-on-error: true
+        run: dotnet test --configuration Release --no-build --logger "trx;LogFileName=flaky-results.trx" --results-directory ./TestResults
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flaky-nunit-test-results
+          path: TestResults/*.trx
+          if-no-files-found: error
+
+      - name: Publish test summary
+        if: always()
+        shell: pwsh
+        run: |
+          $trxFile = Get-ChildItem -Path "$env:GITHUB_WORKSPACE/TestResults" -Filter *.trx -Recurse | Select-Object -First 1
+          if (-not $trxFile) {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## Test Summary`n`nNo TRX result file was produced."
+            exit 0
+          }
+
+          [xml]$trx = Get-Content -Path $trxFile.FullName
+          $namespaceManager = New-Object System.Xml.XmlNamespaceManager($trx.NameTable)
+          $namespaceManager.AddNamespace("trx", "http://microsoft.com/schemas/VisualStudio/TeamTest/2010")
+
+          $counters = $trx.SelectSingleNode("//trx:ResultSummary/trx:Counters", $namespaceManager)
+          $failedResults = $trx.SelectNodes("//trx:Results/trx:UnitTestResult[@outcome='Failed']", $namespaceManager)
+
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## Test Summary"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Total tests: $($counters.total)"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Passed tests: $($counters.passed)"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Failed tests: $($counters.failed)"
+
+          if ($failedResults.Count -gt 0) {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### Failed tests"
+
+            foreach ($failedResult in $failedResults) {
+              $messageNode = $failedResult.SelectSingleNode("trx:Output/trx:ErrorInfo/trx:Message", $namespaceManager)
+              $message = if ($messageNode -and $messageNode.InnerText) { $messageNode.InnerText.Trim() } else { "No failure message recorded." }
+
+              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- **$($failedResult.testName)**"
+              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "  - $message"
+            }
+          }
+
+      - name: Fail workflow when tests fail
+        if: steps.test.outcome == 'failure'
+        run: exit 1
