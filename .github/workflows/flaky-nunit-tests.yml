@@ -200,14 +200,26 @@ jobs:
           $namespaceManager = New-Object System.Xml.XmlNamespaceManager($trx.NameTable)
           $namespaceManager.AddNamespace("trx", "http://microsoft.com/schemas/VisualStudio/TeamTest/2010")
 
-          $counters = $trx.SelectSingleNode("//trx:ResultSummary/trx:Counters", $namespaceManager)
-          $failedResults = $trx.SelectNodes("//trx:Results/trx:UnitTestResult[@outcome='Failed']", $namespaceManager)
+          $counters    = $trx.SelectSingleNode("//trx:ResultSummary/trx:Counters", $namespaceManager)
+          $allResults  = @($trx.SelectNodes("//trx:Results/trx:UnitTestResult", $namespaceManager))
 
           $workflowShouldFail = "${{ steps.evaluate.outputs.workflow_should_fail }}" -eq "true"
           $workflowStatus    = if ($workflowShouldFail) { "❌ FAILED" } else { "✅ PASSED" }
           $failureReason     = "${{ steps.evaluate.outputs.failure_reason }}"
           $flakyTests        = "${{ steps.evaluate.outputs.flaky_tests }}"
 
+          # Load history saved by the evaluate step (already includes current run)
+          $HISTORY_FILE = "./TestHistory/test-history.json"
+          $history = @()
+          if (Test-Path $HISTORY_FILE) {
+            try {
+              $loaded = Get-Content $HISTORY_FILE -Raw | ConvertFrom-Json
+              if ($loaded) { $history = @($loaded) }
+            } catch {}
+          }
+          $totalRuns = $history.Count
+
+          # Top-level metrics table
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## Test Summary"
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "| Metric | Value |"
@@ -227,17 +239,23 @@ jobs:
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**Acceptable flaky tests (below statistical threshold):** $flakyTests"
           }
 
-          if ($failedResults.Count -gt 0) {
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### Failed tests (this run)"
+          # Per-test results table
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### Per-test results"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "| Test | This run | Failures in last $totalRuns run(s) |"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "|------|----------|----------------------------------|"
 
-            foreach ($failedResult in $failedResults) {
-              $messageNode = $failedResult.SelectSingleNode("trx:Output/trx:ErrorInfo/trx:Message", $namespaceManager)
-              $message = if ($messageNode -and $messageNode.InnerText) { $messageNode.InnerText.Trim() } else { "No failure message recorded." }
+          foreach ($result in $allResults | Sort-Object testName) {
+            $name   = $result.testName
+            $failed = $result.outcome -eq "Failed"
+            $status = if ($failed) { "❌ Failed" } else { "✅ Passed" }
 
-              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- **$($failedResult.testName)**"
-              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "  - $message"
-            }
+            # Count how many of the stored runs include this test in their failedTests list
+            $failCount   = @($history | Where-Object { @($_.failedTests) -contains $name }).Count
+            $historyCell = if ($failed) { "$failCount / $totalRuns" } else { "—" }
+
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "| $name | $status | $historyCell |"
           }
 
       - name: Fail workflow when tests fail based on statistics
