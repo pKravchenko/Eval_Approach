@@ -53,7 +53,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: eval-reports
-          path: eval-results/reports/
+          path: |
+            eval-results/reports/*.json
           if-no-files-found: warn
 
       - name: Download previous test history
@@ -290,13 +291,62 @@ jobs:
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
 
           foreach ($testName in $failedTests) {
-            $reportPath = "$reportsDir/$testName.html"
-            if (Test-Path $reportPath) {
-              $html = Get-Content $reportPath -Raw
-              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "<details><summary>❌ $testName</summary>`n`n$html`n`n</details>"
-            } else {
+            $reportPath = "$reportsDir/$testName.json"
+
+            if (-not (Test-Path $reportPath)) {
               Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "<details><summary>❌ $testName</summary>`n`nNo report available.`n`n</details>"
+              continue
             }
+
+            $report = Get-Content $reportPath -Raw | ConvertFrom-Json
+
+            # Build metrics table
+            $tableLines = @(
+              "| Metric | Score | Rating | Status |",
+              "|--------|-------|--------|--------|"
+            )
+            $failedMetricDetails = @()
+
+            $metrics = $report.evaluationResult.metrics
+            foreach ($metricKey in $metrics.PSObject.Properties.Name) {
+              $m          = $metrics.$metricKey
+              $name       = if ($m.name) { $m.name } else { $metricKey }
+              $score      = "$($m.value)/5"
+              $rating     = $m.interpretation.rating
+              $isFailed   = $m.interpretation.failed -eq $true
+              $statusIcon = if ($isFailed) { "❌" } else { "✅" }
+
+              $tableLines += "| $name | $score | $rating | $statusIcon |"
+
+              if ($isFailed) {
+                $errorLines = @($m.diagnostics |
+                  Where-Object { $_.severity -eq "error" } |
+                  ForEach-Object { "- $($_.message)" })
+
+                $detail  = "**❌ ${name}**"
+                if ($m.reason) { $detail += " — $($m.reason)" }
+                if ($errorLines.Count -gt 0) { $detail += "`n`n" + ($errorLines -join "`n") }
+                $failedMetricDetails += $detail
+              }
+            }
+
+            # Optional prompt excerpt (first user message)
+            $promptLine = ""
+            if ($report.messages -and $report.messages.Count -gt 0) {
+              $firstMsg = $report.messages[0]
+              if ($firstMsg.contents -and $firstMsg.contents.Count -gt 0) {
+                $text = $firstMsg.contents[0].text
+                if ($text.Length -gt 200) { $text = $text.Substring(0, 200) + "…" }
+                $promptLine = "> **Prompt:** $text`n`n"
+              }
+            }
+
+            $body  = $promptLine + ($tableLines -join "`n")
+            if ($failedMetricDetails.Count -gt 0) {
+              $body += "`n`n**Failed metrics:**`n`n" + ($failedMetricDetails -join "`n`n")
+            }
+
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "<details><summary>❌ $testName</summary>`n`n$body`n`n</details>"
           }
 
       - name: Fail workflow when tests fail based on statistics

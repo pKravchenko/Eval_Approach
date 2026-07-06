@@ -45,5 +45,5 @@ internal sealed class FileEvalReportSink : IEvalReportSink
     }
 
     public Task WriteHtmlAsync(string testName, string html, CancellationToken ct = default) =>
-        File.WriteAllTextAsync(Path.Combine(_directory, $"{testName}.html"), html, ct);
+        File.WriteAllTextAsync(Path.Combine(_directory, $"{testName}.json"), html, ct);
 }

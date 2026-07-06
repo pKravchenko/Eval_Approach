@@ -62,10 +62,6 @@ public class PlaceholderFlakyTests : EvalTestBase
         try
         {
             FlakyFailureController.AssertTestPassesOrFails(testName);
-
-            Storage.Cache
-                .WriteAsync(testName, $"{{\"test\":\"{testName}\",\"timestamp\":\"{DateTime.UtcNow:o}\"}}")
-                .GetAwaiter().GetResult();
         }
         catch
         {
@@ -74,20 +70,43 @@ public class PlaceholderFlakyTests : EvalTestBase
         }
         finally
         {
-            var status = passed ? "Passed" : "Failed";
-            var color = passed ? "#2da44e" : "#cf222e";
-            var html = $"""
-                <!DOCTYPE html>
-                <html>
-                <head><meta charset="utf-8"><title>{testName}</title></head>
-                <body style="font-family:sans-serif;padding:2rem">
-                  <h1>{testName}</h1>
-                  <p>Status: <strong style="color:{color}">{status}</strong></p>
-                  <p>Timestamp: {DateTime.UtcNow:o}</p>
-                </body>
-                </html>
-                """;
-            Storage.Reports.WriteHtmlAsync(testName, html).GetAwaiter().GetResult();
+            Storage.Reports
+                .WriteHtmlAsync(testName, BuildReport(testName, passed))
+                .GetAwaiter().GetResult();
         }
+    }
+
+    private static string BuildReport(string testName, bool passed)
+    {
+        var score = passed ? Random.Shared.Next(3, 6) : Random.Shared.Next(1, 3);
+        var rating = score >= 4 ? "good" : score >= 3 ? "acceptable" : "unacceptable";
+        var failedStr = passed ? "false" : "true";
+        var reason = passed ? "Simulated evaluation passed" : "Simulated flaky test failure";
+        var diagnostics = passed
+            ? ""
+            : """{"severity":"error","message":"Simulated flaky test failure"}""";
+
+        return $$"""
+            {
+              "scenarioName": "{{testName}}",
+              "iterationName": "1",
+              "creationTime": "{{DateTime.UtcNow:o}}",
+              "evaluationResult": {
+                "metrics": {
+                  "Quality": {
+                    "$type": "numeric",
+                    "value": {{score}},
+                    "name": "Quality",
+                    "reason": "{{reason}}",
+                    "interpretation": {
+                      "rating": "{{rating}}",
+                      "failed": {{failedStr}}
+                    },
+                    "diagnostics": [{{diagnostics}}]
+                  }
+                }
+              }
+            }
+            """;
     }
 }
