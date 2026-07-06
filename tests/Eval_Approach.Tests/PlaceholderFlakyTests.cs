@@ -78,13 +78,28 @@ public class PlaceholderFlakyTests : EvalTestBase
 
     private static string BuildReport(string testName, bool passed)
     {
-        var score = passed ? Random.Shared.Next(3, 6) : Random.Shared.Next(1, 3);
-        var rating = score >= 4 ? "good" : score >= 3 ? "acceptable" : "unacceptable";
-        var failedStr = passed ? "false" : "true";
-        var reason = passed ? "Simulated evaluation passed" : "Simulated flaky test failure";
-        var diagnostics = passed
-            ? ""
-            : """{"severity":"error","message":"Simulated flaky test failure"}""";
+        // Coherence: always passes, score 4-5
+        var coherenceScore = Random.Shared.Next(4, 6);
+        var coherenceRating = coherenceScore == 5 ? "exceptional" : "good";
+
+        // Relevance: always passes, score 3-5
+        var relevanceScore = Random.Shared.Next(3, 6);
+        var relevanceRating = relevanceScore >= 4 ? "good" : "acceptable";
+
+        // Quality: reflects overall pass/fail
+        var qualityScore = passed ? Random.Shared.Next(3, 6) : Random.Shared.Next(1, 3);
+        var qualityRating = qualityScore >= 4 ? "good" : qualityScore >= 3 ? "acceptable" : "unacceptable";
+        var qualityFailed = !passed;
+        var qualityReason = passed
+            ? $"Score {qualityScore}/5: all checks passed"
+            : $"Score {qualityScore}/5: {Random.Shared.Next(1, 5)} critical {Random.Shared.Next(3, 15)} errors";
+        var qualityDiag = qualityFailed
+            ? $$"""
+              {"severity":"error","message":"Simulated flaky failure: judge score below threshold"},
+              {"severity":"warning","message":"Low confidence: borderline score for {{testName}}"},
+              {"severity":"informational","message":"Threshold used: 3/5"}
+              """
+            : """{"severity":"informational","message":"All quality checks passed"}""";
 
         return $$"""
             {
@@ -93,16 +108,42 @@ public class PlaceholderFlakyTests : EvalTestBase
               "creationTime": "{{DateTime.UtcNow:o}}",
               "evaluationResult": {
                 "metrics": {
+                  "Coherence": {
+                    "$type": "numeric",
+                    "value": {{coherenceScore}},
+                    "name": "Coherence",
+                    "reason": "Response is coherent and logically structured (score {{coherenceScore}}/5)",
+                    "interpretation": {
+                      "rating": "{{coherenceRating}}",
+                      "failed": false
+                    },
+                    "diagnostics": [
+                      {"severity":"informational","message":"No coherence issues detected"}
+                    ]
+                  },
+                  "Relevance": {
+                    "$type": "numeric",
+                    "value": {{relevanceScore}},
+                    "name": "Relevance",
+                    "reason": "Response addresses the prompt with score {{relevanceScore}}/5",
+                    "interpretation": {
+                      "rating": "{{relevanceRating}}",
+                      "failed": false
+                    },
+                    "diagnostics": []
+                  },
                   "Quality": {
                     "$type": "numeric",
-                    "value": {{score}},
+                    "value": {{qualityScore}},
                     "name": "Quality",
-                    "reason": "{{reason}}",
+                    "reason": "{{qualityReason}}",
                     "interpretation": {
-                      "rating": "{{rating}}",
-                      "failed": {{failedStr}}
+                      "rating": "{{qualityRating}}",
+                      "failed": {{(qualityFailed ? "true" : "false")}}
                     },
-                    "diagnostics": [{{diagnostics}}]
+                    "diagnostics": [
+                      {{qualityDiag}}
+                    ]
                   }
                 }
               }
