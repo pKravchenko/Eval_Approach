@@ -300,68 +300,62 @@ jobs:
 
             $report = Get-Content $reportPath -Raw | ConvertFrom-Json
 
-            # Metrics overview table
-            $tableLines = @(
-              "| Metric | Score | Rating | Status |",
-              "|--------|-------|--------|--------|"
-            )
-            # Per-metric detail blocks (reason + all diagnostics)
-            $metricDetailBlocks = @()
+            # Build fully-HTML body (markdown inside <details> stops rendering after a table)
+            $html = "<table><tr><th>Metric</th><th>Score</th><th>Rating</th><th>Status</th></tr>"
 
             $metrics = $report.evaluationResult.metrics
+            $detailRows = ""
+
             foreach ($metricKey in $metrics.PSObject.Properties.Name) {
-              $m          = $metrics.$metricKey
-              $name       = if ($m.name) { $m.name } else { $metricKey }
-              $score      = "$($m.value)/5"
-              $rating     = $m.interpretation.rating
-              $isFailed   = $m.interpretation.failed -eq $true
-              $statusIcon = if ($isFailed) { "❌" } else { "✅" }
+              $m        = $metrics.$metricKey
+              $name     = if ($m.name) { $m.name } else { $metricKey }
+              $score    = "$($m.value)/5"
+              $rating   = $m.interpretation.rating
+              $isFailed = $m.interpretation.failed -eq $true
+              $icon     = if ($isFailed) { "&#10060;" } else { "&#9989;" }
 
-              $tableLines += "| $name | $score | $rating | $statusIcon |"
+              $html += "<tr><td>$name</td><td>$score</td><td>$rating</td><td>$icon</td></tr>"
 
-              # Detail block: always include reason; always include all diagnostics
-              $header = "$statusIcon **$name** ($rating, $score)"
+              # Per-metric detail section
+              $statusLabel = if ($isFailed) { "&#10060; $name" } else { "&#9989; $name" }
+              $detailRows += "<hr><p><strong>$statusLabel</strong> &mdash; $rating, $score</p>"
 
-              $reasonLine = ""
-              if ($m.reason) { $reasonLine = "`n`nReason: $($m.reason)" }
-
-              # interpretation.reason is an additional note from the evaluator
-              $interpReasonLine = ""
-              if ($m.interpretation.reason) { $interpReasonLine = "`nInterpretation: $($m.interpretation.reason)" }
-
-              $diagLines = @($m.diagnostics | ForEach-Object {
-                $icon = switch ($_.severity) {
-                  "error"         { "🔴" }
-                  "warning"       { "🟡" }
-                  "informational" { "🔵" }
-                  default         { "⚪" }
-                }
-                "  $icon $($_.message)"
-              })
-              $diagBlock = ""
-              if ($diagLines.Count -gt 0) {
-                $diagBlock = "`n`nDiagnostics:`n" + ($diagLines -join "`n")
+              if ($m.reason) {
+                $detailRows += "<p><em>Reason:</em> $($m.reason)</p>"
+              }
+              if ($m.interpretation.reason) {
+                $detailRows += "<p><em>Interpretation:</em> $($m.interpretation.reason)</p>"
               }
 
-              $metricDetailBlocks += "$header$reasonLine$interpReasonLine$diagBlock"
+              $diags = @($m.diagnostics)
+              if ($diags.Count -gt 0) {
+                $detailRows += "<p><em>Diagnostics:</em></p><ul>"
+                foreach ($d in $diags) {
+                  $sevIcon = switch ($d.severity) {
+                    "error"         { "&#128308;" }   # 🔴
+                    "warning"       { "&#128993;" }   # 🟡
+                    "informational" { "&#128309;" }   # 🔵
+                    default         { "&#9898;" }     # ⚪
+                  }
+                  $detailRows += "<li>$sevIcon $($d.message)</li>"
+                }
+                $detailRows += "</ul>"
+              }
             }
 
-            # Optional prompt excerpt (first user message)
-            $promptLine = ""
+            $html += "</table>$detailRows"
+
+            # Optional prompt excerpt
             if ($report.messages -and $report.messages.Count -gt 0) {
               $firstMsg = $report.messages[0]
               if ($firstMsg.contents -and $firstMsg.contents.Count -gt 0) {
                 $text = $firstMsg.contents[0].text
-                if ($text.Length -gt 300) { $text = $text.Substring(0, 300) + "…" }
-                $promptLine = "> **Prompt:** $text`n`n"
+                if ($text.Length -gt 300) { $text = $text.Substring(0, 300) + "&hellip;" }
+                $html = "<blockquote><strong>Prompt:</strong> $text</blockquote>$html"
               }
             }
 
-            $separator  = "`n`n---`n`n"
-            $body  = $promptLine + ($tableLines -join "`n")
-            $body += "`n`n---`n`n" + ($metricDetailBlocks -join $separator)
-
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "<details><summary>❌ $testName</summary>`n`n$body`n`n</details>"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "<details><summary>&#10060; $testName</summary>`n`n$html`n`n</details>"
           }
 
       - name: Fail workflow when tests fail based on statistics
