@@ -3,7 +3,7 @@ namespace Eval_Approach.Tests;
 internal static class FlakyFailureController
 {
     private const string ForcedFailureCountEnvironmentVariable = "SIMULATED_FLAKY_FAILURE_COUNT";
-    private const double DefaultFailureProbability = 0.15;
+    private const double DefaultFailureProbability = 0.05;
 
     private static readonly IReadOnlyList<string> TestNames =
         Enumerable.Range(1, 50).Select(i => $"Placeholder_{i:00}").ToList();

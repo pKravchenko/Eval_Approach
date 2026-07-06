@@ -101,7 +101,7 @@ jobs:
           $HISTORY_FILE = "./TestHistory/test-history.json"
           $MAX_HISTORY_RUNS = 3
           $FAILURE_THRESHOLD = 2   # failures in last N runs to be "really failed"
-          $BULK_FAILURE_THRESHOLD = 2  # more than this many failures in one run → always fail
+          $BULK_FAILURE_THRESHOLD = 10 # more than this many failures in one run → always fail (>20% of 50 tests)
 
           # Load existing history
           $history = @()
